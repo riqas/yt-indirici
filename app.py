@@ -316,6 +316,7 @@ QWidget#root, QWidget#list {{ background: {C['bg']}; }}
 QLabel#h1 {{ font-size: 18pt; font-weight: 700; }}
 QLabel#muted {{ color: {C['muted']}; }}
 QLabel#faint {{ color: {C['faint']}; font-size: 9pt; }}
+QLabel#credit {{ color: {C['faint']}; font-size: 8.5pt; }}
 QLabel#section {{ color: {C['muted']}; font-size: 8.5pt; font-weight: 700; letter-spacing: 1px; }}
 QLabel#empty {{ color: {C['muted']}; font-size: 10.5pt; }}
 QFrame#card {{ background: {C['surface']}; border: 1px solid {C['line']}; border-radius: 14px; }}
@@ -717,7 +718,14 @@ class Window(QMainWindow):
         self.btn_cancel.clicked.connect(self.cancel_all)
         foot.addWidget(clear)
         foot.addWidget(self.btn_cancel)
-        lay.addLayout(foot)
+        bottom = QVBoxLayout()
+        bottom.setSpacing(2)
+        bottom.addLayout(foot)
+        credit = QLabel("by riqas", objectName="credit")
+        credit.setAlignment(Qt.AlignmentFlag.AlignRight)
+        credit.setContentsMargins(0, 0, 6, 0)
+        bottom.addWidget(credit)
+        lay.addLayout(bottom)
 
         self.setCentralWidget(root)
         self.seg.buttonClicked.connect(lambda _: self._format_changed())
