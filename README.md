@@ -16,7 +16,7 @@ YouTube'dan doğrudan indirir, çevirme işini de senin bilgisayarında ffmpeg y
 - GoodbyeDPI gibi DPI aşma araçlarının bozduğu bağlantılarda otomatik yeniden deneme
 
 ## Kurulum ve kullanım
-1. [Son sürümü indir](../../archive/refs/heads/main.zip) ve zip'i bir klasöre aç.
+1. **[YT-Indirici.zip indir](../../releases/latest/download/YT-Indirici.zip)** (her zaman son sürüm) ve zip'i bir klasöre aç.
 2. `Baslat.bat`'a çift tıkla.
 
 İlk açılışta eksikleri kendisi kurar (bir kere, birkaç dakika):
