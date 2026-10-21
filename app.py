@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -29,6 +30,7 @@ from yt_dlp.utils import DownloadCancelled
 
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_OUT = Path.home() / "Downloads" / "YT Indirici"
+LOCAL_FFMPEG = APP_DIR / "ffmpeg" / "bin" / "ffmpeg.exe"
 
 MP3_QUALITIES = ["320", "256", "192", "128"]
 MP4_QUALITIES = ["En iyi", "2160p", "1440p", "1080p", "720p", "480p", "360p"]
@@ -52,8 +54,23 @@ def human_eta(sec):
     return f"{sec // 60}:{sec % 60:02d}"
 
 
+FRIENDLY_ERRORS = (
+    ("Private video", "Bu video gizli."),
+    ("video is unavailable", "Video bulunamadı: silinmiş, gizli ya da bölgende kapalı."),
+    ("Video unavailable", "Video bulunamadı: silinmiş, gizli ya da bölgende kapalı."),
+    ("confirm your age", "Yaş doğrulaması isteyen video, giriş yapmadan indirilemiyor."),
+    ("not a bot", "YouTube bot doğrulaması istedi. Biraz bekleyip tekrar dene."),
+    ("members-only", "Yalnız kanal üyelerine açık video."),
+    ("Unsupported URL", "Bu link tanınmadı. YouTube video, playlist ya da kanal linki yapıştır."),
+    ("HTTP Error 404", "Sayfa bulunamadı (404). Linki kontrol et."),
+)
+
+
 def clean_error(msg):
     msg = re.sub(r"\x1b\[[0-9;]*m", "", str(msg))
+    for needle, friendly in FRIENDLY_ERRORS:
+        if needle.lower() in msg.lower():
+            return friendly
     msg = re.sub(r"^(ERROR:\s*)?(\[[^\]]+\]\s*)?([\w-]{6,}:\s*)?", "", msg)
     return msg.strip()[:200] or "Bilinmeyen hata"
 
@@ -111,6 +128,9 @@ def build_opts(fmt, quality, out_dir):
         "http_chunk_size": 10 * 1024 * 1024,  # YouTube hız kısıtına takılmamak için parçalı istek
         **NET_OPTS,
     }
+    # başlatıcının indirdiği ffmpeg: PATH'e güvenme (app.py doğrudan açılırsa PATH'te olmaz)
+    if LOCAL_FFMPEG.exists():
+        opts["ffmpeg_location"] = str(LOCAL_FFMPEG.parent)
     if fmt == "mp3":
         opts.update({
             "format": "bestaudio/best",
@@ -149,7 +169,20 @@ class DownloadJob(QRunnable):
         self.fmt, self.quality, self.out_dir = fmt, quality, out_dir
         self.cancel, self.s = cancel, signals
         self.final_path = ""
+        self.stem = ""
         self.phase = 0
+
+    def _remove_leftovers(self, since):
+        """İptalde yarım kalanları sil (.part, ayrı inen ses/video, MP3'e çevrilmeyi bekleyen dosya, kapak).
+        Hepsi 'başlık.' ile başlıyor; bu işten önce var olan dosyalara (ör. aynı videonun öbür biçimi) dokunma."""
+        if not self.stem:
+            return
+        for p in Path(self.out_dir).iterdir():
+            try:
+                if p.name.startswith(self.stem + ".") and p.stat().st_mtime >= since - 1:
+                    p.unlink()
+            except OSError:
+                pass
 
     def _hook(self, d):
         if self.cancel.is_set():
@@ -191,18 +224,26 @@ class DownloadJob(QRunnable):
             "postprocessor_hooks": [self._pp_hook],
             "post_hooks": [lambda path: setattr(self, "final_path", path)],
         })
+        started = time.time()
         for attempt in range(1, MAX_ATTEMPTS + 1):
             self.s.status.emit(self.job_id, "Bağlanıyor" if attempt == 1 else f"Tekrar deneniyor ({attempt})")
             logger.last_error = ""
             try:
                 with yt_dlp.YoutubeDL(opts) as ydl:
-                    code = ydl.download([self.url])
-                if code == 0:
-                    msg = "Tamam" if self.phase else "Zaten var"
-                    self.s.done.emit(self.job_id, True, msg, self.final_path)
-                    return
-                err = logger.last_error
+                    info = ydl.extract_info(self.url, download=False)
+                    if info.get("title"):
+                        self.s.title.emit(self.job_id, info["title"])
+                    # yt-dlp MP3'te dosya varken videoyu yeniden indirip üstüne yazıyor: önce hedefe bak
+                    target = Path(ydl.prepare_filename(info)).with_suffix(f".{self.fmt}")
+                    self.stem = target.stem
+                    if target.exists():
+                        self.s.done.emit(self.job_id, True, "Zaten var", str(target))
+                        return
+                    ydl.process_ie_result(info, download=True)
+                self.s.done.emit(self.job_id, True, "Tamam", self.final_path)
+                return
             except DownloadCancelled:
+                self._remove_leftovers(started)
                 self.s.done.emit(self.job_id, False, "İptal edildi", "")
                 return
             except Exception as e:  # noqa: BLE001 — her hatayı satırda göster, uygulamayı düşürme
@@ -247,6 +288,14 @@ class PlaylistResolver(QRunnable):
                 self.s.expanded.emit(self.job_id, entries)
         except Exception as e:  # noqa: BLE001
             self.s.done.emit(self.job_id, False, clean_error(logger.last_error or e), "")
+
+
+def video_id(url):
+    """Tek videonun 11 karakterlik id'si (watch?v=, youtu.be/, shorts/, embed/, live/); playlist/kanal için ''."""
+    if is_playlist(url):
+        return ""
+    m = re.search(r"(?:[?&]v=|youtu\.be/|/shorts/|/embed/|/live/)([\w-]{11})", url)
+    return m.group(1) if m else ""
 
 
 def is_playlist(url):
@@ -300,6 +349,7 @@ QProgressBar {{ background: {C['surface2']}; border: none; border-radius: 2px; m
 QProgressBar::chunk {{ background: {C['accent']}; border-radius: 2px; }}
 QProgressBar[state="done"]::chunk {{ background: {C['ok']}; }}
 QProgressBar[state="error"]::chunk {{ background: {C['err']}; }}
+QProgressBar[state="cancelled"]::chunk {{ background: {C['line2']}; }}
 QScrollArea {{ background: transparent; border: none; }}
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
 QScrollBar::handle:vertical {{ background: {C['line2']}; border-radius: 3px; min-height: 30px; }}
@@ -459,11 +509,14 @@ class JobRow(QFrame):
 
     def _paint_tile(self):
         glyph = {"mp3": G_MUSIC, "mp4": G_VIDEO, "list": G_LIST}[self.kind]
-        color = {"queued": C["muted"], "active": C["accent"], "done": C["ok"], "error": C["err"]}[self.state]
+        color = {"queued": C["muted"], "active": C["accent"], "done": C["ok"], "error": C["err"],
+                 "cancelled": C["muted"]}[self.state]
         if self.state == "done":
             glyph = G_CHECK
         elif self.state == "error":
             glyph = G_ERROR
+        elif self.state == "cancelled":
+            glyph = G_CANCEL
         bg = C["surface2"] if self.state == "queued" else tint(color, 0.14)
         self.tile.setPixmap(glyph_pixmap(glyph, color, 40, bg=bg, radius=10))
 
@@ -491,7 +544,7 @@ class JobRow(QFrame):
         self.meta.setText(" · ".join(x for x in (speed, f"{eta} kaldı" if eta else "") if x))
 
     def finish(self, ok, msg, path=""):
-        self.state = "done" if ok else "error"
+        self.state = "done" if ok else "cancelled" if msg == "İptal edildi" else "error"
         self.path = path
         self.anim.stop()
         self.bar.setValue(1000 if ok else max(self.bar.value(), 1000))
@@ -502,7 +555,7 @@ class JobRow(QFrame):
         self.meta.setText("")
         self.status.setText(msg)
         self.status.setToolTip(msg)
-        self.status.setStyleSheet(f"color: {C['ok'] if ok else C['err']};")
+        self.status.setStyleSheet(f"color: {C[{'done': 'ok', 'error': 'err'}.get(self.state, 'muted')]};")
         self.btn.setVisible(ok and bool(path))
         self._paint_tile()
 
@@ -529,7 +582,7 @@ class Window(QMainWindow):
         self.signals.expanded.connect(self.on_expanded)
         self.rows = {}        # sürmekte olan job id → JobRow
         self.all_rows = []
-        self.n_ok = self.n_err = 0
+        self.n_ok = self.n_err = self.n_cancel = 0
         self.cancel = threading.Event()
         self.active = 0
         self._build()
@@ -720,7 +773,11 @@ class Window(QMainWindow):
         self.settings.setValue("fmt", self.fmt())
         self.settings.setValue("quality", self.quality.currentText())
         self.settings.setValue("parallel", int(self.parallel.currentText()))
-        for u in dict.fromkeys(urls):
+        # aynı video farklı link biçimleriyle gelebilir (youtu.be, shorts, &t=): iki iş aynı dosyaya yazmasın
+        unique = {}
+        for u in urls:
+            unique.setdefault(video_id(u) or u, u)
+        for u in unique.values():
             if is_playlist(u):
                 job_id = self.add_row(u, "list")
                 self.on_status(job_id, "Playlist açılıyor")
@@ -762,7 +819,7 @@ class Window(QMainWindow):
             row.deleteLater()
         self.all_rows.clear()
         self.rows.clear()
-        self.n_ok = self.n_err = 0
+        self.n_ok = self.n_err = self.n_cancel = 0
         self.empty.show()
         self.refresh_summary()
 
@@ -773,7 +830,10 @@ class Window(QMainWindow):
 
     def on_status(self, job_id, text):
         if row := self.rows.get(job_id):
+            was = row.state
             row.set_status(text)
+            if row.state != was:
+                self.refresh_summary()
 
     def on_progress(self, job_id, pct, speed, eta):
         if row := self.rows.get(job_id):
@@ -787,8 +847,12 @@ class Window(QMainWindow):
         row.finish(ok, msg, path)
         if ok:
             self.n_ok += 1
+        elif row.state == "cancelled":
+            self.n_cancel += 1
         else:
             self.n_err += 1
+        if self.active == 0 and self.cancel.is_set():
+            self.hint.setText("İptal edildi.")
         self.refresh_summary()
 
     def on_expanded(self, job_id, entries):
@@ -805,11 +869,18 @@ class Window(QMainWindow):
     def refresh_summary(self):
         parts = []
         if self.active:
-            parts.append(f"<span style='color:{C['text']}'><b>{self.active}</b> sürüyor</span>")
+            # paralel sınırı yüzünden bir kısmı sırada bekliyor: ikisini ayrı göster
+            queued = sum(1 for r in self.rows.values() if r.state == "queued")
+            if self.active - queued:
+                parts.append(f"<span style='color:{C['text']}'><b>{self.active - queued}</b> iniyor</span>")
+            if queued:
+                parts.append(f"<span style='color:{C['muted']}'>{queued} sırada</span>")
         if self.n_ok:
             parts.append(f"<span style='color:{C['ok']}'>{self.n_ok} bitti</span>")
         if self.n_err:
             parts.append(f"<span style='color:{C['err']}'>{self.n_err} hata</span>")
+        if self.n_cancel:
+            parts.append(f"<span style='color:{C['muted']}'>{self.n_cancel} iptal</span>")
         self.summary.setText("  ·  ".join(parts) or "Hazır")
 
     # ---------- yardımcılar ----------
