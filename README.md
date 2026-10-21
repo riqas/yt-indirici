@@ -8,11 +8,12 @@ Web dönüştürücüler videoyu önce kendi sunucularına indirip orada çeviri
 YouTube'dan doğrudan indirir, çevirme işini de senin bilgisayarında ffmpeg yapar. Reklam, sıra ve ikinci indirme yok.
 
 ## Özellikler
-- Birden çok link aynı anda; playlist ve kanal linkleri tek tek videolara açılır
-- Aynı anda 1–6 indirme
+- Birden çok link aynı anda; playlist ve kanal linkleri tek tek videolara açılır.
+  Aynı video farklı linklerle (youtu.be, shorts, `&t=`) yapıştırılırsa bir kez iner.
+- Aynı anda 1–6 indirme; daha önce indirilen dosya yeniden indirilmez
 - MP3: 320 / 256 / 192 / 128 kbps, kapak resmi ve etiketler dosyaya gömülür
 - MP4: En iyi, 2160p … 360p; aynı çözünürlükte en uyumlu codec (H.264 + AAC) seçilir
-- İptal, kaldığı yerden yeniden deneme, `yt-dlp güncelle` düğmesi
+- İptal (yarım dosya bırakmaz), kaldığı yerden yeniden deneme, `yt-dlp güncelle` düğmesi
 - GoodbyeDPI gibi DPI aşma araçlarının bozduğu bağlantılarda otomatik yeniden deneme
 
 ## Kurulum ve kullanım
