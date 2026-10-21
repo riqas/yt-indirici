@@ -6,7 +6,7 @@ REM  1) ffmpeg yoksa uygulama klasorune tasinabilir kopya indirir (hash dogrulam
 REM  2) .venv baska PC'den gelmis/bozuksa siler, yeniden kurar
 REM  3) Python 3.12 yoksa python.org'dan indirir, hash'ini dogrular, kurar
 REM  4) Paket eksikse (yt-dlp, PyQt6, deno) kurar, sonra uygulamayi acar
-REM Test: YTI_DRYRUN=1 uygulamayi acmaz · YTI_TEST_NOFFMPEG=1 sistemdeki ffmpeg'i yok sayar
+REM Test: YTI_DRYRUN=1 uygulamayi acmaz / YTI_TEST_NOFFMPEG=1 sistemdeki ffmpeg'i yok sayar
 REM ============================================================
 setlocal EnableExtensions
 chcp 65001 >nul
@@ -34,8 +34,10 @@ set "PATH=%APPDIR%ffmpeg\bin;%PATH%"
 
 REM ---------- 2) .venv saglam mi? (baska PC'den kopyalanan .venv burada patlar)
 :venv
+REM pythonw.exe pencere (GUI) programi olmali; uv'nin kurdugu venv'de konsol programi cikiyor ve yaninda
+REM siyah pencere aciliyor. Calismayan ya da boyle kurulmus .venv silinip yeniden kurulur.
 if exist ".venv\Scripts\python.exe" (
-  ".venv\Scripts\python.exe" -c "import sys" >nul 2>&1
+  ".venv\Scripts\python.exe" -c "import struct,sys;b=open(sys.argv[1],'rb').read(4096);o=struct.unpack_from('<I',b,60)[0];sys.exit(struct.unpack_from('<H',b,o+92)[0]!=2)" ".venv\Scripts\pythonw.exe" >nul 2>&1
   if errorlevel 1 (
     echo  Eski/bozuk kurulum bulundu, yeniden kuruluyor...
     rmdir /s /q ".venv"
@@ -43,13 +45,8 @@ if exist ".venv\Scripts\python.exe" (
 )
 if exist ".venv\Scripts\pythonw.exe" goto :packages
 
-REM ---------- 3) Python + .venv
+REM ---------- 3) Python + .venv (venv her zaman Python'un kendi moduluyle; uv yalniz paket kurar)
 echo  Ilk kurulum yapiliyor, bir kere surer...
-where uv >nul 2>nul
-if not errorlevel 1 (
-  uv venv --python 3.12 .venv || goto :fail
-  goto :packages
-)
 call :find_py
 if not defined PYDIR call :install_py || exit /b 1
 "%PYDIR%\python.exe" -m venv .venv || goto :fail
