@@ -1,0 +1,3 @@
+yt-dlp[default]
+PyQt6
+deno
